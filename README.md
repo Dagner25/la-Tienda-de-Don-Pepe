@@ -1,2 +1,2 @@
-# la-Tienda-de-Don-Pepe
+# lLa-Tiendita-de-Don-Pepe
 Proyecto final de Base de Datos
