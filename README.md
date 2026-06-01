@@ -1,4 +1,7 @@
 # La-Tiendita-de-Don-Pepe
+INTEGRANTES
+-Rony Oscar Choquecondo Luque
+-Dagner Milco Lupacca Holgado
 Proyecto final de Base de Datos
 --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 En la actualidad, la gestión eficiente de la información es un factor fundamental para el éxito de cualquier negocio comercial. Los minimarkets, al manejar diariamente grandes cantidades de datos relacionados con productos, ventas, clientes e inventario, requieren herramientas que permitan organizar y controlar esta información de manera rápida y confiable.
