@@ -1,9 +1,4 @@
-# La-Tiendita-de-Don-Pepe🏪
-INTEGRANTES
-
--Rony Oscar Choquecondo Luque🎮
-
--Dagner Milco Lupacca Holgado🕹️
+# La-Tiendita-de-Don-Pepe
 
 Proyecto final de Base de Datos
 --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
