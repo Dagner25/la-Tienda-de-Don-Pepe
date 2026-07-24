@@ -11,3 +11,50 @@ La implementación de un sistema gestor de base de datos permitirá almacenar, p
 De esta manera, el proyecto busca ofrecer una solución práctica que mejore la organización y productividad del negocio, demostrando la importancia de las bases de datos en la gestión moderna de establecimientos comerciales.
 
 -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+## Motor
+
+Motor recomendado: XAMPP con tablas InnoDB
+
+Los scripts evitan funciones exclusivas para XAMPP Para JSON se usan `JSON_OBJECT`, `JSON_ARRAY`, `JSON_VALID`, `JSON_LENGTH`, `JSON_EXTRACT`, `JSON_UNQUOTE`, `JSON_SET` y `JSON_REMOVE`
+
+## Orden de ejecucion
+
+1. `01_creacion_base_datos.sql`
+2. `02_insercion_datos.sql`
+3. `03_crud_complejo.sql`
+4. `04_reportes.sql`
+5. `05_indices_explain.sql`
+6. `06_transacciones.sql`
+7. `07_json_hibrido.sql`
+8. `08_pruebas.sql`
+
+## Se realizo la peticion de la rubrica
+
+- Integridad: claves primarias, foraneas, `NOT NULL`, `UNIQUE`, `CHECK`, `DEFAULT`, `ON DELETE CASCADE`, `ON DELETE SET NULL` y `ON UPDATE CASCADE`.
+- CRUD complejo: procedimientos `sp_registrar_venta`, `sp_actualizar_detalle_venta` y `sp_anular_venta`.
+- Reportes: procedimientos con `JOIN`, `GROUP BY`, `HAVING`, `SUM`, `COUNT`, `AVG`, `MIN` y `MAX`.
+- Exportacion: consulta `INTO OUTFILE` documentada en `04_reportes.sql`.
+- Optimizacion: indices y planes `EXPLAIN` en `05_indices_explain.sql`.
+- Transacciones: venta con `START TRANSACTION`, `COMMIT`, `ROLLBACK` y `SELECT ... FOR UPDATE`.
+- JSON hibrido: columna `producto.atributos` para datos semiestructurados
+
+## Modelo hibrido
+
+Los datos principales permanecen en tablas relacionales: clientes, empleados, productos, ventas, detalles, categorias y proveedores. La columna `producto.atributos` guarda caracteristicas variables como presentacion, peso, etiquetas, origen o conservacion.
+
+JSON complementa el modelo relacional porque se evita crear columnas vacias para atributos que no aplican a todos los productos, No reemplaza las relaciones, tan solo agrega flexibilidad para informacion semiestructurada
+
+## Exportacion CSV
+
+Antes de ejecutar la exportacion:
+
+```sql
+SHOW VARIABLES LIKE 'secure_file_priv';
+```
+
+Si MariaDB devuelve una ruta, usar esa carpeta en el `INTO OUTFILE` de `04_reportes.sql`. Si no tiene  lospermisos, se debe de ejecutar el reporte normal con:
+
+```sql
+CALL sp_reporte_productos_mas_vendidos('2026-06-01', '2026-07-31', 3);
+```
