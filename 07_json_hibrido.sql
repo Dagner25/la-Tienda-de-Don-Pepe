@@ -1,119 +1,100 @@
 USE tienda_don_pepe;
 
 -- ==========================
--- ATRIBUTOS SEMIESTRUCTURADOS DEL PRODUCTO
+-- INDICE PARA PRODUCTOS POR CATEGORIA Y PRECIO
 -- ==========================
 
-
-
--- Insercion de informacion JSON
-INSERT INTO producto (nombre_prdct, precio_venta, stock_actual, stock_minimo, id_categoria, id_marca, atributos)
-SELECT
-    'Quinua Perlada Don Pepe 500 g',
-    8.70,
-    45,
-    8,
-    1,
-    1,
-    JSON_OBJECT(
-        'marca', 'Don Pepe',
-        'presentacion', 'Bolsa',
-        'peso', '500 g',
-        'etiquetas', JSON_ARRAY('abarrote', 'andino', 'oferta'),
-        'informacion_adicional', JSON_OBJECT('origen', 'Peru', 'conservacion', 'Lugar fresco')
-    )
-WHERE NOT EXISTS (
-    SELECT 1
-    FROM producto
-    WHERE nombre_prdct = 'Quinua Perlada Don Pepe 500 g'
-);
-
-SET @id_producto_json = (
-    SELECT id_producto
-    FROM producto
-    WHERE nombre_prdct = 'Quinua Perlada Don Pepe 500 g'
-    LIMIT 1
-);
-
-
-
-
--- Actualizacion de propiedades
-UPDATE producto
-SET atributos = JSON_SET(atributos, '$.informacion_adicional.conservacion', 'Mantener cerrado en lugar seco')
-WHERE id_producto = @id_producto_json;
-
--- Consulta del JSON completo
-SELECT id_producto, nombre_prdct, atributos
+-- Plan de ejecucion antes del indice
+EXPLAIN
+SELECT id_producto, nombre_prdct, precio_venta, stock_actual
 FROM producto
-WHERE id_producto = @id_producto_json;
+WHERE id_categoria = 1
+  AND precio_venta BETWEEN 4.00 AND 25.00
+ORDER BY precio_venta;
 
--- Consulta de propiedades
-SELECT
-    id_producto,
-    nombre_prdct,
-    JSON_UNQUOTE(JSON_EXTRACT(atributos, '$.marca')) AS marca_json
+-- Creacioon del indice compuesto
+CREATE INDEX idx_producto_categoria_precio
+ON producto(id_categoria, precio_venta);
+
+-- Plan de ejecucion despues del indice
+EXPLAIN
+SELECT id_producto, nombre_prdct, precio_venta, stock_actual
 FROM producto
-WHERE id_producto = @id_producto_json;
+WHERE id_categoria = 1
+  AND precio_venta BETWEEN 4.00 AND 25.00
+ORDER BY precio_venta;
 
--- Filtro por marca
-SELECT id_producto, nombre_prdct
-FROM producto
-WHERE JSON_UNQUOTE(JSON_EXTRACT(atributos, '$.marca')) = 'Don Pepe';
-
--- Agregar y eliminar propiedades
-UPDATE producto
-SET atributos = JSON_SET(atributos, '$.apto_para', JSON_ARRAY('desayuno', 'lonchera'))
-WHERE id_producto = @id_producto_json;
-
-UPDATE producto
-SET atributos = JSON_REMOVE(atributos, '$.peso')
-WHERE id_producto = @id_producto_json;
-
--- Consulta de arreglo JSON
-
-
-
-
-
-
-SELECT
-    nombre_prdct,
-    JSON_UNQUOTE(JSON_EXTRACT(atributos, '$.etiquetas[0]')) AS primera_etiqueta,
-    JSON_EXTRACT(atributos, '$.etiquetas') AS etiquetas,
-    JSON_UNQUOTE(JSON_EXTRACT(atributos, '$.presentacion')) AS presentacion
-FROM producto
-WHERE id_producto = @id_producto_json;
-
--- Validacion de JSON
-SELECT
-    id_producto,
-    nombre_prdct,
-    JSON_VALID(atributos) AS json_valido
-FROM producto
-WHERE atributos IS NOT NULL;
-
-
-
+-- Mejora esperada: filtra por categoria y luego por rango de precio
 
 -- ==========================
--- VISTA DE CONSULTA JSON
+-- INDICE PARA VENTAS POR ESTADO Y FECHA
 -- ==========================
 
-DROP VIEW IF EXISTS vw_productos_atributos_json;
+-- Plan de ejecucion antes del indice
+EXPLAIN
+SELECT id_venta, fch_compra, total, estado
+FROM venta
+WHERE estado = 'PAGADA'
+  AND fch_compra BETWEEN '2026-06-01' AND '2026-07-31';
 
-CREATE VIEW vw_productos_atributos_json AS
-SELECT
-    id_producto,
-    nombre_prdct,
-    precio_venta,
-    stock_actual,
-    JSON_UNQUOTE(JSON_EXTRACT(atributos, '$.marca')) AS marca_json,
-    JSON_UNQUOTE(JSON_EXTRACT(atributos, '$.presentacion')) AS presentacion_json,
-    JSON_UNQUOTE(JSON_EXTRACT(atributos, '$.informacion_adicional.origen')) AS origen_json
-FROM producto
-WHERE atributos IS NOT NULL;
+-- Creacion del indice compuesto
+CREATE INDEX idx_venta_estado_fecha
+ON venta(estado, fch_compra);
 
-SELECT *
-FROM vw_productos_atributos_json
-WHERE marca_json = 'Don Pepe';
+-- Plan de ejecucion despues del indice
+EXPLAIN
+SELECT id_venta, fch_compra, total, estado
+FROM venta
+WHERE estado = 'PAGADA'
+  AND fch_compra BETWEEN '2026-06-01' AND '2026-07-31';
+
+-- Mejora esperada: usa igualdad por estado y rango por fecha
+
+-- ==========================
+-- INDICE PARA DETALLE POR PRODUCTO Y VENTA
+-- ==========================
+
+-- Plan de ejecucion antes del indice
+EXPLAIN
+SELECT id_venta, id_producto, SUM(cantidad) AS unidades, SUM(subtotal) AS ingresos
+FROM detalle_venta
+WHERE id_producto = 1
+GROUP BY id_venta, id_producto;
+
+-- Creacion del indice compuesto
+CREATE INDEX idx_detalle_producto_venta
+ON detalle_venta(id_producto, id_venta);
+
+-- Plan de ejecucion despues del indice
+EXPLAIN
+SELECT id_venta, id_producto, SUM(cantidad) AS unidades, SUM(subtotal) AS ingresos
+FROM detalle_venta
+WHERE id_producto = 1
+GROUP BY id_venta, id_producto;
+
+-- Mejora esperada: reduce filas leidas en reportes por producto
+
+-- ==========================
+-- INDICE PARA HISTORIAL DE CLIENTE
+-- ==========================
+
+-- Plan de ejecucion antes del indice
+EXPLAIN
+SELECT id_venta, fch_compra, total
+FROM venta
+WHERE id_cliente = '12345678'
+ORDER BY fch_compra DESC;
+
+-- Creacion del indice compuesto.
+CREATE INDEX idx_venta_cliente_fecha
+ON venta(id_cliente, fch_compra);
+
+-- Plan de ejecucion despues del indice
+EXPLAIN
+SELECT id_venta, fch_compra, total
+FROM venta
+WHERE id_cliente = '12345678'
+ORDER BY fch_compra DESC;
+
+-- Revisar en EXPLAIN: type, possible_keys, key, rows, filtered y Extra.
+-- Con pocos registros MariaDB puede preferir recorrer toda la tabla.

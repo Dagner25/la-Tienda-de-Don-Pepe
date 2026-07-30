@@ -1,0 +1,54 @@
+<?php
+require __DIR__ . '/../config/conexion.php';
+require __DIR__ . '/../includes/funciones.php';
+requerir_admin();
+
+$estado = $_GET['estado'] ?? '';
+$sql = "SELECT v.id_venta, v.fch_compra, v.total, v.estado, mp.metodo,
+               CONCAT(c.nombres, ' ', c.apellido_p) AS cliente
+        FROM venta v
+        INNER JOIN cliente c ON c.id_dni = v.id_cliente
+        INNER JOIN metodo_pago mp ON mp.id_metodo = v.id_metodo";
+$params = [];
+if (in_array($estado, ['REGISTRADA', 'PAGADA', 'ANULADA'], true)) {
+    $sql .= ' WHERE v.estado = ?';
+    $params[] = $estado;
+}
+$sql .= ' ORDER BY v.fch_compra DESC';
+$stmt = $pdo->prepare($sql);
+$stmt->execute($params);
+$pedidos = $stmt->fetchAll();
+
+$tituloPagina = 'Pedidos - Panel admin';
+$paginaActiva = 'pedidos';
+require __DIR__ . '/header.php';
+?>
+
+<div class="encabezado-admin">
+    <h1>Pedidos</h1>
+    <div>
+        <a href="pedidos.php" class="btn btn-fantasma <?= $estado === '' ? 'btn-verde' : '' ?>" style="padding:7px 12px; font-size:13px;">Todos</a>
+        <a href="pedidos.php?estado=REGISTRADA" class="btn btn-fantasma" style="padding:7px 12px; font-size:13px;">Registrados</a>
+        <a href="pedidos.php?estado=ANULADA" class="btn btn-fantasma" style="padding:7px 12px; font-size:13px;">Anulados</a>
+    </div>
+</div>
+
+<table class="tabla-admin">
+    <thead><tr><th>#</th><th>Cliente</th><th>Fecha</th><th>Metodo</th><th>Total</th><th>Estado</th><th></th></tr></thead>
+    <tbody>
+    <?php foreach ($pedidos as $p): ?>
+        <tr>
+            <td>#<?= (int) $p['id_venta'] ?></td>
+            <td><?= s($p['cliente']) ?></td>
+            <td><?= date('d/m/Y H:i', strtotime($p['fch_compra'])) ?></td>
+            <td><?= s($p['metodo']) ?></td>
+            <td><?= precio((float) $p['total']) ?></td>
+            <td><?= s($p['estado']) ?></td>
+            <td><a href="pedido_ver.php?id=<?= (int) $p['id_venta'] ?>">Ver</a></td>
+        </tr>
+    <?php endforeach; ?>
+    <?php if (empty($pedidos)): ?><tr><td colspan="7" class="texto-centro">No hay pedidos</td></tr><?php endif; ?>
+    </tbody>
+</table>
+
+<?php require __DIR__ . '/footer.php'; ?>

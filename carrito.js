@@ -1,0 +1,1 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300"><rect width="300" height="300" fill="#e8f2fb"/><text x="150" y="140" font-family="Arial" font-size="60" text-anchor="middle">🥛</text><text x="150" y="230" font-family="Arial" font-size="20" fill="#2f6690" text-anchor="middle" font-weight="bold">Lacteos</text></svg>

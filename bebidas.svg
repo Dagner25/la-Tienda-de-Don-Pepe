@@ -1,0 +1,184 @@
+<?php
+require __DIR__ . '/../config/conexion.php';
+require __DIR__ . '/../includes/funciones.php';
+requerir_admin();
+
+$categorias = obtener_categorias($pdo);
+$marcas = obtener_marcas($pdo);
+$errores = [];
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['accion'] ?? '') === 'guardar') {
+    if (!csrf_valido($_POST['csrf'] ?? null)) {
+        $errores[] = 'Tu sesion expiro, intenta nuevamente.';
+    } else {
+        $idProducto = (int) ($_POST['id_producto'] ?? 0);
+        $nombre = trim($_POST['nombre_prdct'] ?? '');
+        $descripcion = trim($_POST['descripcion'] ?? '');
+        $precio = (float) ($_POST['precio_venta'] ?? 0);
+        $stock = (int) ($_POST['stock_actual'] ?? 0);
+        $stockMin = (int) ($_POST['stock_minimo'] ?? 0);
+        $idCategoria = (int) ($_POST['id_categoria'] ?? 0) ?: null;
+        $idMarca = (int) ($_POST['id_marca'] ?? 0) ?: null;
+        $imagen = trim($_POST['imagen'] ?? '') ?: null;
+
+        if ($nombre === '' || $precio <= 0 || $stock < 0) {
+            $errores[] = 'Revisa el nombre, precio y stock del producto.';
+        }
+
+        if (empty($errores)) {
+            if ($idProducto > 0) {
+                $stmt = $pdo->prepare(
+                    'UPDATE producto SET nombre_prdct=?, descripcion=?, precio_venta=?, stock_actual=?, stock_minimo=?, id_categoria=?, id_marca=?, imagen=? WHERE id_producto=?'
+                );
+                $stmt->execute([$nombre, $descripcion, $precio, $stock, $stockMin, $idCategoria, $idMarca, $imagen, $idProducto]);
+                flash('exito', 'Producto actualizado.');
+            } else {
+                $stmt = $pdo->prepare(
+                    'INSERT INTO producto (nombre_prdct, descripcion, precio_venta, stock_actual, stock_minimo, id_categoria, id_marca, imagen) VALUES (?,?,?,?,?,?,?,?)'
+                );
+                $stmt->execute([$nombre, $descripcion, $precio, $stock, $stockMin, $idCategoria, $idMarca, $imagen]);
+                flash('exito', 'Producto creado.');
+            }
+            header('Location: productos.php');
+            exit;
+        }
+    }
+}
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['accion'] ?? '') === 'eliminar') {
+    if (csrf_valido($_POST['csrf'] ?? null)) {
+        try {
+            $pdo->prepare('DELETE FROM producto WHERE id_producto = ?')->execute([(int) $_POST['id_producto']]);
+            flash('exito', 'Producto eliminado.');
+        } catch (PDOException $e) {
+            flash('error', 'No se puede eliminar: el producto tiene ventas u otros registros asociados. Puedes poner su stock en 0 en su lugar.');
+        }
+    }
+    header('Location: productos.php');
+    exit;
+}
+
+$productoEditar = null;
+if (!empty($_GET['editar'])) 
+{
+    $stmt = $pdo->prepare('SELECT * FROM producto WHERE id_producto = ?');
+    $stmt->execute([(int) $_GET['editar']]);
+    $productoEditar = $stmt->fetch();
+}
+
+$buscar = trim($_GET['buscar'] ?? '');
+$sql = 'SELECT p.*, c.nmbr_categoria, m.nombre_marca FROM producto p
+        LEFT JOIN categoria c ON c.id_categoria = p.id_categoria
+        LEFT JOIN marca m ON m.id_marca = p.id_marca';
+$params = [];
+if ($buscar !== '') {
+    $sql .= ' WHERE p.nombre_prdct LIKE ?';
+    $params[] = "%$buscar%";
+}
+$sql .= ' ORDER BY p.id_producto DESC';
+$stmt = $pdo->prepare($sql);
+$stmt->execute($params);
+$productos = $stmt->fetchAll();
+
+$tituloPagina = 'Productos - Panel admin';
+$paginaActiva = 'productos';
+require __DIR__ . '/header.php';
+?>
+
+<div class="encabezado-admin">
+    <h1>Productos</h1>
+    <form method="get" action="productos.php">
+        <input type="text" name="buscar" placeholder="Buscar producto..." value="<?= s($buscar) ?>" style="padding:8px 12px; border-radius:8px; border:1px solid var(--gris-borde);">
+    </form>
+</div>
+
+<?php foreach ($errores as $e): ?><div class="alerta alerta-error"><?= s($e) ?></div><?php endforeach; ?>
+
+<div style="display:grid; grid-template-columns: 1fr 340px; gap:20px; align-items:start;">
+    <table class="tabla-admin">
+        <thead><tr><th>Producto</th><th>Categoria</th><th>Precio</th><th>Stock</th><th></th></tr></thead>
+        <tbody>
+        <?php foreach ($productos as $p): ?>
+            <tr>
+                <td><?= s($p['nombre_prdct']) ?></td>
+                <td><?= s($p['nmbr_categoria'] ?? '-') ?></td>
+                <td><?= precio((float) $p['precio_venta']) ?></td>
+                <td><?= (int) $p['stock_actual'] ?><?= $p['stock_actual'] <= $p['stock_minimo'] ? ' ⚠️' : '' ?></td>
+                <td class="acciones-tabla">
+                    <a href="productos.php?editar=<?= (int) $p['id_producto'] ?>">Editar</a>
+                    <form method="post" action="productos.php" style="display:inline;" onsubmit="return confirm('¿Eliminar este producto?');">
+                        <input type="hidden" name="accion" value="eliminar">
+                        <input type="hidden" name="id_producto" value="<?= (int) $p['id_producto'] ?>">
+                        <input type="hidden" name="csrf" value="<?= s(token_csrf()) ?>">
+                        <button type="submit" style="background:none;border:none;color:#a3262c;cursor:pointer;font-size:12px;">Eliminar</button>
+                    </form>
+                </td>
+            </tr>
+        <?php endforeach; ?>
+        <?php if (empty($productos)): ?><tr><td colspan="5" class="texto-centro">No hay productos</td></tr><?php endif; ?>
+        </tbody>
+    </table>
+
+    <div class="tarjeta-resumen">
+        <h3 class="mt-0"><?= $productoEditar ? 'Editar producto' : 'Nuevo producto' ?></h3>
+        <form method="post" action="productos.php">
+            <input type="hidden" name="accion" value="guardar">
+            <input type="hidden" name="id_producto" value="<?= (int) ($productoEditar['id_producto'] ?? 0) ?>">
+            <input type="hidden" name="csrf" value="<?= s(token_csrf()) ?>">
+
+            <div class="campo">
+                <label>Nombre</label>
+                <input type="text" name="nombre_prdct" value="<?= s($productoEditar['nombre_prdct'] ?? '') ?>" required>
+            </div>
+            <div class="campo">
+                <label>Descripcion corta</label>
+                <input type="text" name="descripcion" value="<?= s($productoEditar['descripcion'] ?? '') ?>">
+            </div>
+            <div class="fila-2">
+                <div class="campo">
+                    <label>Precio (S/)</label>
+                    <input type="number" step="0.10" min="0.10" name="precio_venta" value="<?= s((string) ($productoEditar['precio_venta'] ?? '')) ?>" required>
+                </div>
+                <div class="campo">
+                    <label>Stock actual</label>
+                    <input type="number" min="0" name="stock_actual" value="<?= s((string) ($productoEditar['stock_actual'] ?? '0')) ?>" required>
+                </div>
+            </div>
+            <div class="fila-2">
+                <div class="campo">
+                    <label>Stock minimo</label>
+                    <input type="number" min="0" name="stock_minimo" value="<?= s((string) ($productoEditar['stock_minimo'] ?? '0')) ?>">
+                </div>
+                <div class="campo">
+                    <label>Imagen (archivo en assets/img)</label>
+                    <input type="text" name="imagen" placeholder="producto.svg" value="<?= s($productoEditar['imagen'] ?? '') ?>">
+                </div>
+            </div>
+            <div class="campo">
+                <label>Categoria</label>
+                <select name="id_categoria">
+                    <option value="">Sin categoria</option>
+                    <?php foreach ($categorias as $c): ?>
+                        <option value="<?= (int) $c['id_categoria'] ?>" <?= (($productoEditar['id_categoria'] ?? null) == $c['id_categoria']) ? 'selected' : '' ?>><?= s($c['nmbr_categoria']) ?></option>
+                    <?php endforeach; ?>
+                </select>
+            </div>
+            <div class="campo">
+                <label>Marca</label>
+                <select name="id_marca">
+                    <option value="">Sin marca</option>
+                    <?php foreach ($marcas as $m): ?>
+                        <option value="<?= (int) $m['id_marca'] ?>" <?= (($productoEditar['id_marca'] ?? null) == $m['id_marca']) ? 'selected' : '' ?>><?= s($m['nombre_marca']) ?></option>
+                    <?php endforeach; ?>
+                </select>
+            </div>
+
+            <button type="submit" class="btn btn-verde btn-bloque"><?= $productoEditar ? 'Guardar cambios' : 'Crear producto' ?></button>
+            <?php if ($productoEditar): ?>
+                <a href="productos.php" class="btn btn-fantasma btn-bloque" style="margin-top:8px;">Cancelar edicion</a>
+            <?php endif; ?>
+        </form>
+    </div>
+</div>
+
+<?php require __DIR__ . '/footer.php'; ?>

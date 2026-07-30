@@ -1,442 +1,367 @@
+-- ==========================
+-- BASE DE DATOS
+-- ==========================
+
+DROP DATABASE IF EXISTS tienda_don_pepe;
+CREATE DATABASE tienda_don_pepe
+  CHARACTER SET utf8mb4
+  COLLATE utf8mb4_unicode_ci;
 USE tienda_don_pepe;
 
 -- ==========================
--- VISTA DE VENTA COMPLETA
+-- TABLA CLIENTE
 -- ==========================
 
-DROP VIEW IF EXISTS vw_ventas_detalladas;
-
-CREATE VIEW vw_ventas_detalladas AS
-SELECT
-    v.id_venta,
-    v.fch_compra AS fecha,
-    CONCAT(c.nombres, ' ', c.apellido_p) AS cliente,
-    COALESCE(CONCAT(e.nombres, ' ', e.apellido_p), 'Empleado eliminado') AS empleado,
-    p.nombre_prdct AS producto,
-    COALESCE(cat.nmbr_categoria, 'Sin categoria') AS categoria,
-    dv.cantidad,
-    dv.precio_unitario,
-    dv.subtotal,
-    v.total,
-    v.estado
-FROM venta AS v
-INNER JOIN cliente AS c ON c.id_dni = v.id_cliente
-LEFT JOIN empleado AS e ON e.id_dni = v.id_empleado
-INNER JOIN detalle_venta AS dv ON dv.id_venta = v.id_venta
-INNER JOIN producto AS p ON p.id_producto = dv.id_producto
-LEFT JOIN categoria AS cat ON cat.id_categoria = p.id_categoria;
-
-DELIMITER $$
+CREATE TABLE cliente (
+    id_dni CHAR(8) PRIMARY KEY,
+    nombres VARCHAR(100) NOT NULL,
+    apellido_p VARCHAR(50) NOT NULL,
+    apellido_m VARCHAR(50),
+    region VARCHAR(50) NOT NULL DEFAULT 'Lima',
+    direccion VARCHAR(200) NOT NULL,
+    provincia VARCHAR(50) NOT NULL,
+    distrito VARCHAR(50) NOT NULL,
+    fch_nacimiento DATE,
+    telefono VARCHAR(20) NOT NULL UNIQUE,
+    correo VARCHAR(100) NOT NULL UNIQUE,
+    CHECK (id_dni REGEXP '^[0-9]{8}$')
+) ENGINE=InnoDB;
 
 -- ==========================
--- REGISTRO DE VENTA
+-- TABLA CLIENTE VIP
 -- ==========================
 
-DROP PROCEDURE IF EXISTS sp_registrar_venta$$
-
-CREATE PROCEDURE sp_registrar_venta(
-    IN p_id_cliente CHAR(8),
-    IN p_id_empleado CHAR(8),
-    IN p_id_metodo INT,
-    IN p_detalles LONGTEXT
-)
-BEGIN
-    DECLARE v_id_venta INT DEFAULT 0;
-    DECLARE v_total DECIMAL(12,2) DEFAULT 0.00;
-    DECLARE v_indice INT DEFAULT 0;
-    DECLARE v_numero_detalles INT DEFAULT 0;
-    DECLARE v_id_producto INT DEFAULT 0;
-    DECLARE v_cantidad INT DEFAULT 0;
-    DECLARE v_precio DECIMAL(10,2) DEFAULT 0.00;
-    DECLARE v_stock INT DEFAULT 0;
-    DECLARE v_existe INT DEFAULT 0;
-
-    -- Reversion ante cualquier error del proceso.
-    DECLARE EXIT HANDLER FOR SQLEXCEPTION
-    BEGIN
-        ROLLBACK;
-        RESIGNAL;
-    END;
-
-    -- Validacion del arreglo JSON recibido.
-    IF p_detalles IS NULL OR TRIM(p_detalles) = '' THEN
-        SIGNAL SQLSTATE '45000'
-        SET MESSAGE_TEXT = 'Debe enviar los detalles de la venta.';
-    END IF;
-
-    IF JSON_VALID(p_detalles) = 0 THEN
-        SIGNAL SQLSTATE '45000'
-        SET MESSAGE_TEXT = 'Los detalles de la venta no contienen un JSON valido.';
-    END IF;
-
-    IF LEFT(TRIM(p_detalles), 1) <> '[' THEN
-        SIGNAL SQLSTATE '45000'
-        SET MESSAGE_TEXT = 'Los detalles deben enviarse como un arreglo JSON.';
-    END IF;
-
-    SET v_numero_detalles = JSON_LENGTH(p_detalles);
-
-    IF v_numero_detalles IS NULL OR v_numero_detalles <= 0 THEN
-        SIGNAL SQLSTATE '45000'
-        SET MESSAGE_TEXT = 'La venta debe contener al menos un producto.';
-    END IF;
-
-    START TRANSACTION;
-
-    -- Validacion de cliente.
-    SELECT COUNT(*) INTO v_existe
-    FROM cliente
-    WHERE id_dni = p_id_cliente;
-
-    IF v_existe = 0 THEN
-        SIGNAL SQLSTATE '45000'
-        SET MESSAGE_TEXT = 'El cliente indicado no existe.';
-    END IF;
-
-    -- Validacion de empleado.
-    IF p_id_empleado IS NOT NULL AND TRIM(p_id_empleado) <> '' THEN
-        SELECT COUNT(*) INTO v_existe
-        FROM empleado
-        WHERE id_dni = p_id_empleado
-          AND activo = 1;
-
-        IF v_existe = 0 THEN
-            SIGNAL SQLSTATE '45000'
-            SET MESSAGE_TEXT = 'El empleado no existe o no se encuentra activo.';
-        END IF;
-    END IF;
-
-    -- Validacion de metodo de pago.
-    SELECT COUNT(*) INTO v_existe
-    FROM metodo_pago
-    WHERE id_metodo = p_id_metodo;
-
-    IF v_existe = 0 THEN
-        SIGNAL SQLSTATE '45000'
-        SET MESSAGE_TEXT = 'El metodo de pago indicado no existe.';
-    END IF;
-
-    -- Registro de cabecera.
-    INSERT INTO venta (fch_compra, total, estado, id_cliente, id_empleado, id_metodo)
-    VALUES (NOW(), 0.00, 'REGISTRADA', p_id_cliente, NULLIF(TRIM(p_id_empleado), ''), p_id_metodo);
-
-    SET v_id_venta = LAST_INSERT_ID();
-
-    -- Insercion de detalles y descuento de inventario.
-    WHILE v_indice < v_numero_detalles DO
-        SET v_id_producto = CAST(JSON_UNQUOTE(JSON_EXTRACT(p_detalles, CONCAT('$[', v_indice, '].id_producto'))) AS UNSIGNED);
-        SET v_cantidad = CAST(JSON_UNQUOTE(JSON_EXTRACT(p_detalles, CONCAT('$[', v_indice, '].cantidad'))) AS UNSIGNED);
-
-        IF v_id_producto IS NULL OR v_id_producto <= 0 THEN
-            SIGNAL SQLSTATE '45000'
-            SET MESSAGE_TEXT = 'Uno de los detalles no contiene un producto valido.';
-        END IF;
-
-        IF v_cantidad IS NULL OR v_cantidad <= 0 THEN
-            SIGNAL SQLSTATE '45000'
-            SET MESSAGE_TEXT = 'La cantidad de cada producto debe ser mayor que cero.';
-        END IF;
-
-        SELECT COUNT(*) INTO v_existe
-        FROM producto
-        WHERE id_producto = v_id_producto;
-
-        IF v_existe = 0 THEN
-            SIGNAL SQLSTATE '45000'
-            SET MESSAGE_TEXT = 'Uno de los productos indicados no existe.';
-        END IF;
-
-        -- Validacion de stock con bloqueo.
-        SELECT precio_venta, stock_actual
-        INTO v_precio, v_stock
-        FROM producto
-        WHERE id_producto = v_id_producto
-        FOR UPDATE;
-
-        IF v_precio IS NULL OR v_precio <= 0 THEN
-            SIGNAL SQLSTATE '45000'
-            SET MESSAGE_TEXT = 'El producto no tiene un precio de venta valido.';
-        END IF;
-
-        IF v_stock < v_cantidad THEN
-            SIGNAL SQLSTATE '45000'
-            SET MESSAGE_TEXT = 'Stock insuficiente para registrar la venta.';
-        END IF;
-
-        INSERT INTO detalle_venta (cantidad, precio_unitario, subtotal, id_venta, id_producto)
-        VALUES (v_cantidad, v_precio, ROUND(v_cantidad * v_precio, 2), v_id_venta, v_id_producto);
-
-        UPDATE producto
-        SET stock_actual = stock_actual - v_cantidad
-        WHERE id_producto = v_id_producto;
-
-        SET v_total = v_total + ROUND(v_cantidad * v_precio, 2);
-        SET v_indice = v_indice + 1;
-    END WHILE;
-
-    -- Actualizacion del total y confirmacion.
-    UPDATE venta
-    SET total = ROUND(v_total, 2)
-    WHERE id_venta = v_id_venta;
-
-    COMMIT;
-
-    SELECT v_id_venta AS id_venta_registrada, ROUND(v_total, 2) AS total_registrado;
-END$$
+CREATE TABLE cliente_vip (
+    id_dni CHAR(8) PRIMARY KEY,
+    nivel_cliente VARCHAR(20) NOT NULL DEFAULT 'Bronce',
+    tasa_descuento_vip DECIMAL(5,2) NOT NULL DEFAULT 0.00,
+    CHECK (nivel_cliente IN ('Bronce', 'Plata', 'Oro')),
+    CHECK (tasa_descuento_vip BETWEEN 0 AND 30),
+    FOREIGN KEY (id_dni) REFERENCES cliente(id_dni)
+        ON DELETE CASCADE
+        ON UPDATE CASCADE
+) ENGINE=InnoDB;
 
 -- ==========================
--- ACTUALIZACION DE DETALLE
+-- TABLA CLIENTE COMUN
 -- ==========================
 
-DROP PROCEDURE IF EXISTS sp_actualizar_detalle_venta$$
-
-CREATE PROCEDURE sp_actualizar_detalle_venta(
-    IN p_id_detalle INT,
-    IN p_nueva_cantidad INT
-)
-BEGIN
-    DECLARE v_id_venta INT DEFAULT 0;
-    DECLARE v_id_producto INT DEFAULT 0;
-    DECLARE v_cantidad_anterior INT DEFAULT 0;
-    DECLARE v_precio_actual DECIMAL(10,2) DEFAULT 0.00;
-    DECLARE v_stock_actual INT DEFAULT 0;
-    DECLARE v_stock_disponible INT DEFAULT 0;
-    DECLARE v_estado VARCHAR(20);
-    DECLARE v_existe INT DEFAULT 0;
-
-    DECLARE EXIT HANDLER FOR SQLEXCEPTION
-    BEGIN
-        ROLLBACK;
-        RESIGNAL;
-    END;
-
-    -- Validacion inicial.
-    IF p_id_detalle IS NULL OR p_id_detalle <= 0 THEN
-        SIGNAL SQLSTATE '45000'
-        SET MESSAGE_TEXT = 'Debe indicar un detalle de venta valido.';
-    END IF;
-
-    IF p_nueva_cantidad IS NULL OR p_nueva_cantidad <= 0 THEN
-        SIGNAL SQLSTATE '45000'
-        SET MESSAGE_TEXT = 'La nueva cantidad debe ser mayor que cero.';
-    END IF;
-
-    START TRANSACTION;
-
-    -- Recuperacion del detalle y estado de la venta.
-    SELECT COUNT(*) INTO v_existe
-    FROM detalle_venta
-    WHERE id_detalle = p_id_detalle;
-
-    IF v_existe = 0 THEN
-        SIGNAL SQLSTATE '45000'
-        SET MESSAGE_TEXT = 'El detalle de venta indicado no existe.';
-    END IF;
-
-    SELECT dv.id_venta, dv.id_producto, dv.cantidad, v.estado
-    INTO v_id_venta, v_id_producto, v_cantidad_anterior, v_estado
-    FROM detalle_venta AS dv
-    INNER JOIN venta AS v ON v.id_venta = dv.id_venta
-    WHERE dv.id_detalle = p_id_detalle
-    FOR UPDATE;
-
-    IF v_estado = 'ANULADA' THEN
-        SIGNAL SQLSTATE '45000'
-        SET MESSAGE_TEXT = 'No se puede actualizar una venta anulada.';
-    END IF;
-
-
-
-
-    -- Reposicion temporal y nueva validacion de stock.
-    SELECT precio_venta, stock_actual
-    INTO v_precio_actual, v_stock_actual
-    FROM producto
-    WHERE id_producto = v_id_producto
-    FOR UPDATE;
-
-    SET v_stock_disponible = v_stock_actual + v_cantidad_anterior;
-
-    IF v_stock_disponible < p_nueva_cantidad THEN
-        SIGNAL SQLSTATE '45000'
-        SET MESSAGE_TEXT = 'Stock insuficiente para actualizar el detalle.';
-    END IF;
-
-    -- Actualizacion vinculada.
-    UPDATE producto
-    SET stock_actual = stock_actual + v_cantidad_anterior - p_nueva_cantidad
-    WHERE id_producto = v_id_producto;
-
-    UPDATE detalle_venta
-    SET cantidad = p_nueva_cantidad,
-        precio_unitario = v_precio_actual,
-        subtotal = ROUND(p_nueva_cantidad * v_precio_actual, 2)
-    WHERE id_detalle = p_id_detalle;
-
-    UPDATE venta
-    SET total = (
-        SELECT COALESCE(ROUND(SUM(dv2.subtotal), 2), 0.00)
-        FROM detalle_venta AS dv2
-        WHERE dv2.id_venta = v_id_venta
-    )
-    WHERE id_venta = v_id_venta;
-
-    COMMIT;
-
-    SELECT v_id_venta AS id_venta_actualizada, p_id_detalle AS id_detalle_actualizado, p_nueva_cantidad AS nueva_cantidad;
-END$$
+CREATE TABLE cliente_comun (
+    id_dni CHAR(8) PRIMARY KEY,
+    lim_descuento_acumulado DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+    tasa_descuento DECIMAL(5,2) NOT NULL DEFAULT 0.00,
+    CHECK (lim_descuento_acumulado >= 0),
+    CHECK (tasa_descuento BETWEEN 0 AND 20),
+    FOREIGN KEY (id_dni) REFERENCES cliente(id_dni)
+        ON DELETE CASCADE
+        ON UPDATE CASCADE
+) ENGINE=InnoDB;
 
 -- ==========================
--- ANULACION DE VENTA
+-- TABLA EMPLEADO
 -- ==========================
 
-
-
-DROP PROCEDURE IF EXISTS sp_anular_venta$$
-
-CREATE PROCEDURE sp_anular_venta(IN p_id_venta INT)
-BEGIN
-    DECLARE v_estado VARCHAR(20);
-    DECLARE v_id_producto INT DEFAULT 0;
-    DECLARE v_cantidad INT DEFAULT 0;
-    DECLARE v_fin INT DEFAULT 0;
-    DECLARE v_existe INT DEFAULT 0;
-
-    -- Detalles usados para devolver stock.
-    DECLARE cur_detalles CURSOR FOR
-        SELECT id_producto, cantidad
-        FROM detalle_venta
-        WHERE id_venta = p_id_venta;
-
-    DECLARE CONTINUE HANDLER FOR NOT FOUND SET v_fin = 1;
-
-    DECLARE EXIT HANDLER FOR SQLEXCEPTION
-    BEGIN
-        ROLLBACK;
-        RESIGNAL;
-    END;
-
-    IF p_id_venta IS NULL OR p_id_venta <= 0 THEN
-        SIGNAL SQLSTATE '45000'
-        SET MESSAGE_TEXT = 'Debe indicar una venta valida.';
-    END IF;
-
-    START TRANSACTION;
-
-    -- Validacion de venta.
-    SELECT COUNT(*) INTO v_existe
-    FROM venta
-    WHERE id_venta = p_id_venta;
-
-    IF v_existe = 0 THEN
-        SIGNAL SQLSTATE '45000'
-        SET MESSAGE_TEXT = 'La venta indicada no existe.';
-    END IF;
-
-    SELECT estado INTO v_estado
-    FROM venta
-    WHERE id_venta = p_id_venta
-    FOR UPDATE;
-
-    IF v_estado = 'ANULADA' THEN
-        SIGNAL SQLSTATE '45000'
-        SET MESSAGE_TEXT = 'La venta ya fue anulada anteriormente.';
-    END IF;
-
-    -- Devolucion de stock.
-    OPEN cur_detalles;
-
-    leer_detalles: LOOP
-        FETCH cur_detalles INTO v_id_producto, v_cantidad;
-
-        IF v_fin = 1 THEN
-            LEAVE leer_detalles;
-        END IF;
-
-        UPDATE producto
-        SET stock_actual = stock_actual + v_cantidad
-        WHERE id_producto = v_id_producto;
-    END LOOP;
-
-    CLOSE cur_detalles;
-
-    -- Conserva el historial y cambia solo el estado.
-    UPDATE venta
-    SET estado = 'ANULADA'
-    WHERE id_venta = p_id_venta;
-
-    COMMIT;
-
-    SELECT p_id_venta AS id_venta_anulada, 'ANULADA' AS nuevo_estado;
-END$$
-
-DELIMITER ;
+CREATE TABLE empleado (
+    id_dni CHAR(8) PRIMARY KEY,
+    nombres VARCHAR(100) NOT NULL,
+    apellido_p VARCHAR(50) NOT NULL,
+    apellido_m VARCHAR(50),
+    region VARCHAR(50) NOT NULL DEFAULT 'Lima',
+    provincia VARCHAR(50) NOT NULL,
+    distrito VARCHAR(50) NOT NULL,
+    fch_nacimiento DATE,
+    telefono VARCHAR(20) NOT NULL UNIQUE,
+    correo VARCHAR(100) NOT NULL UNIQUE,
+    sueldo DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+    fch_ingreso DATE NOT NULL,
+    activo TINYINT(1) NOT NULL DEFAULT 1,
+    CHECK (id_dni REGEXP '^[0-9]{8}$'),
+    CHECK (sueldo >= 0)
+) ENGINE=InnoDB;
 
 -- ==========================
--- CRUD BASICO
+-- TABLA GERENTE
 -- ==========================
 
--- INSERT de categorea de prueba
-INSERT INTO categoria (nmbr_categoria)
-SELECT 'Mascotas'
-WHERE NOT EXISTS (
-    SELECT 1
-    FROM categoria
-    WHERE nmbr_categoria = 'Mascotas'
-);
+CREATE TABLE gerente (
+    id_dni CHAR(8) PRIMARY KEY,
+    descripcion VARCHAR(200) NOT NULL,
+    FOREIGN KEY (id_dni) REFERENCES empleado(id_dni)
+        ON DELETE CASCADE
+        ON UPDATE CASCADE
+) ENGINE=InnoDB;
 
-SET @id_categoria_mascotas = (
-    SELECT id_categoria
-    FROM categoria
-    WHERE nmbr_categoria = 'Mascotas'
-    LIMIT 1
-);
+-- ==========================
+-- TABLA EMPLEADOS OTROS
+-- ==========================
 
-SET @id_marca_demo = (
-    SELECT MIN(id_marca)
-    FROM marca
-);
+CREATE TABLE empleados_otros (
+    id_dni CHAR(8) PRIMARY KEY,
+    cargo VARCHAR(50) NOT NULL,
+    descripcion VARCHAR(200),
+    FOREIGN KEY (id_dni) REFERENCES empleado(id_dni)
+        ON DELETE CASCADE
+        ON UPDATE CASCADE
+) ENGINE=InnoDB;
 
--- INSERT de producto de prueba
-INSERT INTO producto (nombre_prdct, precio_venta, stock_actual, stock_minimo, id_categoria, id_marca, atributos)
-SELECT
-    'Arena Sanitaria Demo 2 kg',
-    12.50,
-    10,
-    3,
-    @id_categoria_mascotas,
-    @id_marca_demo,
-    JSON_OBJECT('marca', 'Don Pepe', 'uso', 'demo', 'presentacion', 'Bolsa de 2 kg')
-WHERE @id_categoria_mascotas IS NOT NULL
-  AND @id_marca_demo IS NOT NULL
-  AND NOT EXISTS (
-      SELECT 1
-      FROM producto
-      WHERE nombre_prdct = 'Arena Sanitaria Demo 2 kg'
-  );
+-- ==========================
+-- TABLA METODO DE PAGO
+-- ==========================
 
--- SELECT y UPDATE del producto de prueba
-SELECT id_producto, nombre_prdct, precio_venta, stock_actual, atributos
-FROM producto
-WHERE nombre_prdct = 'Arena Sanitaria Demo 2 kg';
+CREATE TABLE metodo_pago (
+    id_metodo INT PRIMARY KEY AUTO_INCREMENT,
+    metodo VARCHAR(50) NOT NULL UNIQUE
+) ENGINE=InnoDB;
 
-UPDATE producto
-SET precio_venta = 13.00,
-    stock_actual = stock_actual + 5
-WHERE nombre_prdct = 'Arena Sanitaria Demo 2 kg';
+-- ==========================
+-- TABLA CATEGORIA
+-- ==========================
 
-SELECT id_producto, nombre_prdct, precio_venta, stock_actual
-FROM producto
-WHERE nombre_prdct = 'Arena Sanitaria Demo 2 kg';
+CREATE TABLE categoria (
+    id_categoria INT PRIMARY KEY AUTO_INCREMENT,
+    nmbr_categoria VARCHAR(100) NOT NULL UNIQUE
+) ENGINE=InnoDB;
 
--- DELETE dee datos de prueba
-DELETE FROM producto
-WHERE nombre_prdct = 'Arena Sanitaria Demo 2 kg';
+-- ==========================
+-- TABLA MARCA
+-- ==========================
 
-DELETE FROM categoria
-WHERE nmbr_categoria = 'Mascotas'
-  AND NOT EXISTS (
-      SELECT 1
-      FROM producto
-      WHERE producto.id_categoria = categoria.id_categoria
-  );
+CREATE TABLE marca (
+    id_marca INT PRIMARY KEY AUTO_INCREMENT,
+    nombre_marca VARCHAR(100) NOT NULL UNIQUE
+) ENGINE=InnoDB;
+
+-- ==========================
+-- TABLA PRODUCTO
+-- ==========================
+
+-- Atributos permite guardar datos variables en formato JSON.
+CREATE TABLE producto (
+    id_producto INT PRIMARY KEY AUTO_INCREMENT,
+    nombre_prdct VARCHAR(120) NOT NULL UNIQUE,
+    precio_venta DECIMAL(10,2) NOT NULL,
+    stock_actual INT NOT NULL DEFAULT 0,
+    stock_minimo INT NOT NULL DEFAULT 0,
+    id_categoria INT NULL,
+    id_marca INT NULL,
+    atributos JSON NULL,
+    CHECK (precio_venta > 0),
+    CHECK (stock_actual >= 0),
+    CHECK (stock_minimo >= 0),
+    CHECK (atributos IS NULL OR JSON_VALID(atributos)),
+    FOREIGN KEY (id_categoria) REFERENCES categoria(id_categoria)
+        ON DELETE SET NULL
+        ON UPDATE CASCADE,
+    FOREIGN KEY (id_marca) REFERENCES marca(id_marca)
+        ON DELETE SET NULL
+        ON UPDATE CASCADE
+) ENGINE=InnoDB;
+
+-- ==========================
+-- TABLA PROVEEDOR
+-- ==========================
+
+CREATE TABLE proveedor (
+    id_proveedor INT PRIMARY KEY AUTO_INCREMENT,
+    ruc_dni VARCHAR(20) NOT NULL UNIQUE,
+    contacto VARCHAR(120) NOT NULL,
+    telefono VARCHAR(20),
+    correo VARCHAR(100) UNIQUE
+) ENGINE=InnoDB;
+
+-- ==========================
+-- TABLA PRODUCTO PROVEEDOR
+-- ==========================
+
+CREATE TABLE producto_proveedor (
+    id_producto INT NOT NULL,
+    id_proveedor INT NOT NULL,
+    PRIMARY KEY(id_producto, id_proveedor),
+    FOREIGN KEY(id_producto) REFERENCES producto(id_producto)
+        ON DELETE CASCADE
+        ON UPDATE CASCADE,
+    FOREIGN KEY(id_proveedor) REFERENCES proveedor(id_proveedor)
+        ON DELETE CASCADE
+        ON UPDATE CASCADE
+) ENGINE=InnoDB;
+
+-- ==========================
+-- TABLA VENTA
+-- ==========================
+
+CREATE TABLE venta (
+    id_venta INT PRIMARY KEY AUTO_INCREMENT,
+    fch_compra DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    total DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+    estado VARCHAR(20) NOT NULL DEFAULT 'REGISTRADA',
+    id_cliente CHAR(8) NOT NULL,
+    id_empleado CHAR(8) NULL,
+    id_metodo INT NOT NULL,
+    CHECK (total >= 0),
+    CHECK (estado IN ('REGISTRADA', 'PAGADA', 'ANULADA')),
+    FOREIGN KEY (id_cliente) REFERENCES cliente(id_dni)
+        ON UPDATE CASCADE,
+    FOREIGN KEY (id_empleado) REFERENCES empleado(id_dni)
+        ON DELETE SET NULL
+        ON UPDATE CASCADE,
+    FOREIGN KEY (id_metodo) REFERENCES metodo_pago(id_metodo)
+        ON UPDATE CASCADE
+) ENGINE=InnoDB;
+
+-- ==========================
+-- TABLA DETALLE VENTA
+-- ==========================
+
+CREATE TABLE detalle_venta (
+    id_detalle INT PRIMARY KEY AUTO_INCREMENT,
+    cantidad INT NOT NULL,
+    precio_unitario DECIMAL(10,2) NOT NULL,
+    subtotal DECIMAL(10,2) NOT NULL,
+    id_venta INT NOT NULL,
+    id_producto INT NOT NULL,
+    CHECK (cantidad > 0),
+    CHECK (precio_unitario > 0),
+    CHECK (subtotal >= 0),
+    FOREIGN KEY (id_venta) REFERENCES venta(id_venta)
+        ON DELETE CASCADE
+        ON UPDATE CASCADE,
+    FOREIGN KEY (id_producto) REFERENCES producto(id_producto)
+        ON UPDATE CASCADE
+) ENGINE=InnoDB;
+
+-- ==========================
+-- TABLA ENVIO
+-- ==========================
+
+CREATE TABLE envio (
+    id_envio INT PRIMARY KEY AUTO_INCREMENT,
+    direcc_entrega VARCHAR(200) NOT NULL,
+    estado VARCHAR(50) NOT NULL DEFAULT 'Pendiente',
+    id_venta INT NOT NULL UNIQUE,
+    CHECK (estado IN ('Pendiente', 'Preparando', 'En camino', 'Entregado', 'Cancelado')),
+    FOREIGN KEY (id_venta) REFERENCES venta(id_venta)
+        ON DELETE CASCADE
+        ON UPDATE CASCADE
+) ENGINE=InnoDB;
+
+-- ==========================
+-- TABLA DEVOLUCION
+-- ==========================
+
+CREATE TABLE devolucion (
+    id_devolucion INT PRIMARY KEY AUTO_INCREMENT,
+    motivo VARCHAR(200) NOT NULL,
+    fecha DATE NOT NULL,
+    monto_reembolso DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+    id_venta INT NULL,
+    CHECK (monto_reembolso >= 0),
+    FOREIGN KEY (id_venta) REFERENCES venta(id_venta)
+        ON DELETE SET NULL
+        ON UPDATE CASCADE
+) ENGINE=InnoDB;
+
+-- ==========================
+-- TABLA PROMOCION
+-- ==========================
+
+CREATE TABLE promocion (
+    id_promocion INT PRIMARY KEY AUTO_INCREMENT,
+    porcentaje DECIMAL(5,2) NOT NULL,
+    fch_inicio DATE NOT NULL,
+    fch_fin DATE NOT NULL,
+    CHECK (porcentaje BETWEEN 0 AND 100),
+    CHECK (fch_fin >= fch_inicio)
+) ENGINE=InnoDB;
+
+
+
+
+-- ==========================
+-- TABLA PRODUCTO PROMOCION
+-- ==========================
+
+CREATE TABLE producto_promocion (
+    id_producto INT NOT NULL,
+    id_promocion INT NOT NULL,
+    PRIMARY KEY(id_producto, id_promocion),
+    FOREIGN KEY(id_producto) REFERENCES producto(id_producto)
+        ON DELETE CASCADE
+        ON UPDATE CASCADE,
+    FOREIGN KEY(id_promocion) REFERENCES promocion(id_promocion)
+        ON DELETE CASCADE
+        ON UPDATE CASCADE
+) ENGINE=InnoDB;
+
+-- ==========================
+-- TABLA ALMACEN
+-- ==========================
+
+CREATE TABLE almacen (
+    id_almacen INT PRIMARY KEY AUTO_INCREMENT,
+    nombre_almacen VARCHAR(100) NOT NULL UNIQUE,
+    tipo VARCHAR(50) NOT NULL,
+    CHECK (tipo IN ('Principal', 'Secundario', 'Temporal'))
+) ENGINE=InnoDB;
+
+-- ==========================
+-- TABLA PRODUCTO ALMACEN
+-- ==========================
+
+CREATE TABLE producto_almacen (
+    id_producto INT NOT NULL,
+    id_almacen INT NOT NULL,
+    PRIMARY KEY(id_producto, id_almacen),
+    FOREIGN KEY(id_producto) REFERENCES producto(id_producto)
+        ON DELETE CASCADE
+        ON UPDATE CASCADE,
+    FOREIGN KEY(id_almacen) REFERENCES almacen(id_almacen)
+        ON DELETE CASCADE
+        ON UPDATE CASCADE
+) ENGINE=InnoDB;
+
+-- ==========================
+-- TABLA INVENTARIO
+-- ==========================
+
+CREATE TABLE inventario (
+    id_inventario INT PRIMARY KEY AUTO_INCREMENT,
+    cantidad_actual INT NOT NULL DEFAULT 0,
+    id_almacen INT NOT NULL,
+    CHECK (cantidad_actual >= 0),
+    FOREIGN KEY(id_almacen) REFERENCES almacen(id_almacen)
+        ON DELETE CASCADE
+        ON UPDATE CASCADE
+) ENGINE=InnoDB;
+
+-- ==========================
+-- TABLA VALORACION DEL SERVICIO
+-- ==========================
+
+CREATE TABLE valoracion_del_servicio (
+    id_resena_servicio INT PRIMARY KEY AUTO_INCREMENT,
+    puntuacion INT NOT NULL,
+    comentario TEXT NOT NULL,
+    id_cliente CHAR(8) NOT NULL,
+    CHECK (puntuacion BETWEEN 1 AND 5),
+    FOREIGN KEY(id_cliente) REFERENCES cliente(id_dni)
+        ON DELETE CASCADE
+        ON UPDATE CASCADE
+) ENGINE=InnoDB;
+
+
+
+
+-- ==========================
+-- TABLA VALORACION DE PRODUCTO
+-- ==========================
+
+CREATE TABLE valoracion_resena_de_fabrica (
+    id_resena INT PRIMARY KEY AUTO_INCREMENT,
+    puntuacion INT NOT NULL,
+    comentario TEXT NOT NULL,
+    id_producto INT NOT NULL,
+    CHECK (puntuacion BETWEEN 1 AND 5),
+    FOREIGN KEY(id_producto) REFERENCES producto(id_producto)
+        ON DELETE CASCADE
+        ON UPDATE CASCADE
+) ENGINE=InnoDB;

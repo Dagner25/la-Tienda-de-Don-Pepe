@@ -1,0 +1,121 @@
+<?php
+require __DIR__ . '/../config/conexion.php';
+require __DIR__ . '/../includes/funciones.php';
+requerir_admin();
+
+$idVenta = (int) ($_GET['id'] ?? 0);
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && csrf_valido($_POST['csrf'] ?? null)) {
+    if (($_POST['accion'] ?? '') === 'anular') {
+        try {
+            $call = $pdo->prepare('CALL sp_anular_venta(?)');
+            $call->execute([$idVenta]);
+            $call->closeCursor();
+            flash('exito', 'Pedido anulado y stock repuesto.');
+        } catch (PDOException $e) {
+            flash('error', 'No se pudo anular el pedido.');
+        }
+    } elseif (($_POST['accion'] ?? '') === 'estado_envio') {
+        $nuevoEstado = $_POST['estado_envio'] ?? '';
+        if (in_array($nuevoEstado, ['Pendiente', 'Preparando', 'En camino', 'Entregado', 'Cancelado'], true)) {
+            $upd = $pdo->prepare('UPDATE envio SET estado = ? WHERE id_venta = ?');
+            $upd->execute([$nuevoEstado, $idVenta]);
+            flash('exito', 'Estado de envio actualizado.');
+        }
+    }
+    header('Location: pedido_ver.php?id=' . $idVenta);
+    exit;
+}
+
+$stmt = $pdo->prepare(
+    "SELECT v.*, mp.metodo, e.direcc_entrega, e.estado AS estado_envio,
+            CONCAT(c.nombres, ' ', c.apellido_p) AS cliente, c.telefono, c.correo
+     FROM venta v
+     INNER JOIN cliente c ON c.id_dni = v.id_cliente
+     INNER JOIN metodo_pago mp ON mp.id_metodo = v.id_metodo
+     LEFT JOIN envio e ON e.id_venta = v.id_venta
+     WHERE v.id_venta = ?"
+);
+$stmt->execute([$idVenta]);
+$venta = $stmt->fetch();
+
+if (!$venta) {
+    flash('error', 'Pedido no encontrado.');
+    header('Location: pedidos.php');
+    exit;
+}
+
+$stmtDetalle = $pdo->prepare(
+    'SELECT dv.*, p.nombre_prdct FROM detalle_venta dv INNER JOIN producto p ON p.id_producto = dv.id_producto WHERE dv.id_venta = ?'
+);
+$stmtDetalle->execute([$idVenta]);
+$lineas = $stmtDetalle->fetchAll();
+
+$tituloPagina = 'Pedido #' . $idVenta . ' - Panel admin';
+$paginaActiva = 'pedidos';
+require __DIR__ . '/header.php';
+?>
+
+<div class="encabezado-admin">
+    <h1>Pedido #<?= (int) $venta['id_venta'] ?></h1>
+    <a href="pedidos.php" class="btn btn-fantasma">← Volver</a>
+</div>
+
+<div style="display:grid; grid-template-columns: 1.4fr 1fr; gap:20px; align-items:start;">
+    <div>
+        <table class="tabla-admin">
+            <thead><tr><th>Producto</th><th>Cant.</th><th>P. unitario</th><th>Subtotal</th></tr></thead>
+            <tbody>
+            <?php foreach ($lineas as $l): ?>
+                <tr>
+                    <td><?= s($l['nombre_prdct']) ?></td>
+                    <td><?= (int) $l['cantidad'] ?></td>
+                    <td><?= precio((float) $l['precio_unitario']) ?></td>
+                    <td><?= precio((float) $l['subtotal']) ?></td>
+                </tr>
+            <?php endforeach; ?>
+            </tbody>
+        </table>
+        <div class="resumen-carrito" style="max-width:none; margin-top:14px; box-shadow:none;">
+            <div class="linea-total grande"><span>Total</span><span><?= precio((float) $venta['total']) ?></span></div>
+        </div>
+    </div>
+
+    <div>
+        <div class="tarjeta-resumen" style="margin-bottom:16px;">
+            <h3 class="mt-0">Cliente</h3>
+            <p><?= s($venta['cliente']) ?><br><?= s($venta['telefono']) ?><br><?= s($venta['correo']) ?></p>
+            <p><strong>Metodo de pago:</strong> <?= s($venta['metodo']) ?></p>
+            <p><strong>Estado del pedido:</strong> <?= s($venta['estado']) ?></p>
+            <?php if ($venta['direcc_entrega']): ?><p><strong>Entrega:</strong> <?= s($venta['direcc_entrega']) ?></p><?php endif; ?>
+        </div>
+
+        <?php if ($venta['estado_envio']): ?>
+        <div class="tarjeta-resumen" style="margin-bottom:16px;">
+            <h3 class="mt-0">Estado de envio</h3>
+            <form method="post" action="pedido_ver.php?id=<?= (int) $idVenta ?>">
+                <input type="hidden" name="accion" value="estado_envio">
+                <input type="hidden" name="csrf" value="<?= s(token_csrf()) ?>">
+                <div class="campo">
+                    <select name="estado_envio">
+                        <?php foreach (['Pendiente', 'Preparando', 'En camino', 'Entregado', 'Cancelado'] as $op): ?>
+                            <option value="<?= $op ?>" <?= $venta['estado_envio'] === $op ? 'selected' : '' ?>><?= $op ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+                <button type="submit" class="btn btn-verde btn-bloque">Actualizar envio</button>
+            </form>
+        </div>
+        <?php endif; ?>
+
+        <?php if ($venta['estado'] !== 'ANULADA'): ?>
+        <form method="post" action="pedido_ver.php?id=<?= (int) $idVenta ?>" onsubmit="return confirm('¿Anular este pedido? Se repondra el stock.');">
+            <input type="hidden" name="accion" value="anular">
+            <input type="hidden" name="csrf" value="<?= s(token_csrf()) ?>">
+            <button type="submit" class="btn btn-peligro btn-bloque">Anular pedido</button>
+        </form>
+        <?php endif; ?>
+    </div>
+</div>
+
+<?php require __DIR__ . '/footer.php'; ?>

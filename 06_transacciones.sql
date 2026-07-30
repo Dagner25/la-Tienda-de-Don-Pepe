@@ -1,194 +1,133 @@
 USE tienda_don_pepe;
 
-DELIMITER $$
+DELIMITER //
 
 -- ==========================
--- PRUEBA DE COMMIT
+-- REPORTE DE PRODUCTOS MAS VENDIDOS
 -- ==========================
 
-DROP PROCEDURE IF EXISTS sp_prueba_commit_venta$$
+DROP PROCEDURE IF EXISTS sp_reporte_productos_mas_vendidos//
 
-CREATE PROCEDURE sp_prueba_commit_venta()
+CREATE PROCEDURE sp_reporte_productos_mas_vendidos(
+    IN p_fecha_inicio DATE,
+    IN p_fecha_fin DATE,
+    IN p_cantidad_minima INT
+)
 BEGIN
-    DECLARE v_id_producto INT;
-    DECLARE v_id_cliente CHAR(8);
-    DECLARE v_id_empleado CHAR(8);
-    DECLARE v_id_metodo INT;
-    DECLARE v_stock_antes INT;
-    DECLARE v_stock_despues INT;
-    DECLARE v_ventas_antes INT;
-    DECLARE v_ventas_despues INT;
-
-    -- Datos disponibles para una venta correcta
-    SELECT id_producto INTO v_id_producto
-    FROM producto
-    WHERE stock_actual >= 2
-      AND precio_venta > 0
-    ORDER BY id_producto
-    LIMIT 1;
-
-    SELECT id_dni INTO v_id_cliente
-    FROM cliente
-    ORDER BY id_dni
-    LIMIT 1;
-
-    SELECT id_dni INTO v_id_empleado
-    FROM empleado
-    WHERE activo = 1
-    ORDER BY id_dni
-    LIMIT 1;
-
-    SELECT id_metodo INTO v_id_metodo
-    FROM metodo_pago
-    ORDER BY id_metodo
-    LIMIT 1;
-
-    IF v_id_producto IS NULL THEN
-        SIGNAL SQLSTATE '45000'
-        SET MESSAGE_TEXT = 'No existe un producto con stock suficiente para la prueba.';
-    END IF;
-
-    IF v_id_cliente IS NULL THEN
-        SIGNAL SQLSTATE '45000'
-        SET MESSAGE_TEXT = 'No existen clientes para realizar la prueba.';
-    END IF;
-
-    IF v_id_metodo IS NULL THEN
-        SIGNAL SQLSTATE '45000'
-        SET MESSAGE_TEXT = 'No existen metodos de pago para realizar la prueba.';
-    END IF;
-
-    -- Registro valido que debe confirmar la transaccion
-    SELECT stock_actual INTO v_stock_antes
-    FROM producto
-    WHERE id_producto = v_id_producto;
-
-    SELECT COUNT(*) INTO v_ventas_antes
-    FROM venta;
-
-    CALL sp_registrar_venta(
-        v_id_cliente,
-        v_id_empleado,
-        v_id_metodo,
-        JSON_ARRAY(JSON_OBJECT('id_producto', v_id_producto, 'cantidad', 2))
-    );
-
-    SELECT stock_actual INTO v_stock_despues
-    FROM producto
-    WHERE id_producto = v_id_producto;
-
-    SELECT COUNT(*) INTO v_ventas_despues
-    FROM venta;
-
+    -- Agrupacion por producto y categoria
     SELECT
-        'COMMIT CORRECTO' AS resultado,
-        v_id_producto AS id_producto,
-        v_stock_antes AS stock_antes,
-        v_stock_despues AS stock_despues,
-        v_stock_antes - v_stock_despues AS unidades_descontadas,
-        v_ventas_antes AS ventas_antes,
-        v_ventas_despues AS ventas_despues;
-END$$
+        p.id_producto,
+        p.nombre_prdct AS producto,
+        COALESCE(c.nmbr_categoria, 'Sin categoria') AS categoria,
+        SUM(dv.cantidad) AS cantidad_total_vendida,
+        COUNT(DISTINCT v.id_venta) AS numero_de_ventas,
+        SUM(dv.subtotal) AS ingreso_total_generado,
+        AVG(dv.precio_unitario) AS precio_promedio,
+        MIN(DATE(v.fch_compra)) AS primera_fecha_venta,
+        MAX(DATE(v.fch_compra)) AS ultima_fecha_venta
+    FROM detalle_venta AS dv
+    INNER JOIN venta AS v ON v.id_venta = dv.id_venta
+    INNER JOIN producto AS p ON p.id_producto = dv.id_producto
+    LEFT JOIN categoria AS c ON c.id_categoria = p.id_categoria
+    WHERE v.estado <> 'ANULADA'
+      AND DATE(v.fch_compra) BETWEEN p_fecha_inicio AND p_fecha_fin
+    GROUP BY p.id_producto, p.nombre_prdct, c.nmbr_categoria
+    HAVING SUM(dv.cantidad) >= p_cantidad_minima
+    ORDER BY cantidad_total_vendida DESC, ingreso_total_generado DESC;
+END//
 
 -- ==========================
--- PRUEBA DE ROLLBACK
+-- REPORTE DE INGRESOS POR CATEGORIA
 -- ==========================
 
-DROP PROCEDURE IF EXISTS sp_prueba_rollback_stock$$
+DROP PROCEDURE IF EXISTS sp_reporte_ingresos_por_categoria//
 
-CREATE PROCEDURE sp_prueba_rollback_stock()
+CREATE PROCEDURE sp_reporte_ingresos_por_categoria(
+    IN p_fecha_inicio DATE,
+    IN p_fecha_fin DATE,
+    IN p_monto_minimo DECIMAL(12,2)
+)
 BEGIN
-    DECLARE v_id_producto INT;
-    DECLARE v_id_cliente CHAR(8);
-    DECLARE v_id_empleado CHAR(8);
-    DECLARE v_id_metodo INT;
-    DECLARE v_stock_antes INT;
-    DECLARE v_stock_despues INT;
-    DECLARE v_ventas_antes INT;
-    DECLARE v_ventas_despues INT;
-    DECLARE v_error VARCHAR(500) DEFAULT 'No se produjo error';
-
-    -- Compatible con MariaDB/XAMPP: usa un mensaje fijo en el manejador
-    DECLARE CONTINUE HANDLER FOR SQLEXCEPTION
-    BEGIN
-        SET v_error = 'Error esperado: stock insuficiente o validacion de venta.';
-    END;
-
-    -- Datos disponibles para forzar un error de stock
-    SELECT id_producto INTO v_id_producto
-    FROM producto
-    WHERE stock_actual >= 0
-      AND precio_venta > 0
-    ORDER BY id_producto
-    LIMIT 1;
-
-    SELECT id_dni INTO v_id_cliente
-    FROM cliente
-    ORDER BY id_dni
-    LIMIT 1;
-
-    SELECT id_dni INTO v_id_empleado
-    FROM empleado
-    WHERE activo = 1
-    ORDER BY id_dni
-    LIMIT 1;
-
-    SELECT id_metodo INTO v_id_metodo
-    FROM metodo_pago
-    ORDER BY id_metodo
-    LIMIT 1;
-
-    IF v_id_producto IS NULL THEN
-        SIGNAL SQLSTATE '45000'
-        SET MESSAGE_TEXT = 'No existen productos para realizar la prueba.';
-    END IF;
-
-    IF v_id_cliente IS NULL THEN
-        SIGNAL SQLSTATE '45000'
-        SET MESSAGE_TEXT = 'No existen clientes para realizar la prueba.';
-    END IF;
-
-    IF v_id_metodo IS NULL THEN
-        SIGNAL SQLSTATE '45000'
-        SET MESSAGE_TEXT = 'No existen metodos de pago para realizar la prueba.';
-    END IF;
-
-    SELECT stock_actual INTO v_stock_antes
-    FROM producto
-    WHERE id_producto = v_id_producto;
-
-    SELECT COUNT(*) INTO v_ventas_antes
-    FROM venta;
-
-    -- Cantidad superior al stock para provocar ROLLBACK.
-    CALL sp_registrar_venta(
-        v_id_cliente,
-        v_id_empleado,
-        v_id_metodo,
-        JSON_ARRAY(JSON_OBJECT('id_producto', v_id_producto, 'cantidad', v_stock_antes + 9999))
-    );
-
-    SELECT stock_actual INTO v_stock_despues
-    FROM producto
-    WHERE id_producto = v_id_producto;
-
-    SELECT COUNT(*) INTO v_ventas_despues
-    FROM venta;
-
+    -- Filtro minimo mediante HAVING
     SELECT
-        'ROLLBACK COMPROBADO' AS resultado,
-        v_error AS error_capturado,
-        v_id_producto AS id_producto,
-        v_stock_antes AS stock_antes,
-        v_stock_despues AS stock_despues,
-        v_ventas_antes AS ventas_antes,
-        v_ventas_despues AS ventas_despues,
-        CASE
-            WHEN v_stock_antes = v_stock_despues
-             AND v_ventas_antes = v_ventas_despues
-            THEN 'La base de datos no sufrio cambios'
-            ELSE 'Revisar: se detectaron cambios'
-        END AS comprobacion;
-END$$
+        COALESCE(c.nmbr_categoria, 'Sin categoria') AS categoria,
+        COUNT(DISTINCT v.id_venta) AS ventas,
+        COUNT(dv.id_detalle) AS lineas_vendidas,
+        SUM(dv.cantidad) AS unidades_vendidas,
+        SUM(dv.subtotal) AS ingresos,
+        AVG(dv.subtotal) AS ticket_promedio_por_linea,
+        MAX(dv.subtotal) AS mayor_subtotal
+    FROM detalle_venta AS dv
+    INNER JOIN venta AS v ON v.id_venta = dv.id_venta
+    INNER JOIN producto AS p ON p.id_producto = dv.id_producto
+    LEFT JOIN categoria AS c ON c.id_categoria = p.id_categoria
+    WHERE v.estado <> 'ANULADA'
+      AND DATE(v.fch_compra) BETWEEN p_fecha_inicio AND p_fecha_fin
+    GROUP BY c.id_categoria, c.nmbr_categoria
+    HAVING SUM(dv.subtotal) >= p_monto_minimo
+    ORDER BY ingresos DESC;
+END//
 
 DELIMITER ;
+
+-- ==========================
+-- EJECUCION DE REPORTES
+-- ==========================
+
+CALL sp_reporte_productos_mas_vendidos('2026-06-01', '2026-07-31', 3);
+CALL sp_reporte_ingresos_por_categoria('2026-06-01', '2026-07-31', 20.00);
+
+-- Productos que requieren reposicion
+SELECT
+    p.id_producto,
+    p.nombre_prdct,
+    p.stock_actual,
+    p.stock_minimo,
+    COALESCE(c.nmbr_categoria, 'Sin categoria') AS categoria
+FROM producto AS p
+LEFT JOIN categoria AS c ON c.id_categoria = p.id_categoria
+WHERE p.stock_actual <= p.stock_minimo
+ORDER BY p.stock_actual ASC;
+
+-- ==========================
+-- EXPORTACION A CSV
+-- ==========================
+
+-- Revisar la ruta permitida por MariaDB/MySQL antes de exportar
+SHOW VARIABLES LIKE 'secure_file_priv';
+
+-- La exportacion queda comentada porque depende de permisos FILE y de secure_file_priv
+/*
+SELECT
+    'id_producto',
+    'producto',
+    'categoria',
+    'cantidad_total_vendida',
+    'numero_de_ventas',
+    'ingreso_total_generado',
+    'precio_promedio',
+    'primera_fecha_venta',
+    'ultima_fecha_venta'
+UNION ALL
+SELECT
+    CAST(p.id_producto AS CHAR),
+    p.nombre_prdct,
+    COALESCE(c.nmbr_categoria, 'Sin categoria'),
+    CAST(SUM(dv.cantidad) AS CHAR),
+    CAST(COUNT(DISTINCT v.id_venta) AS CHAR),
+    CAST(SUM(dv.subtotal) AS CHAR),
+    CAST(AVG(dv.precio_unitario) AS CHAR),
+    CAST(MIN(DATE(v.fch_compra)) AS CHAR),
+    CAST(MAX(DATE(v.fch_compra)) AS CHAR)
+FROM detalle_venta AS dv
+INNER JOIN venta AS v ON v.id_venta = dv.id_venta
+INNER JOIN producto AS p ON p.id_producto = dv.id_producto
+LEFT JOIN categoria AS c ON c.id_categoria = p.id_categoria
+WHERE v.estado <> 'ANULADA'
+GROUP BY p.id_producto, p.nombre_prdct, c.nmbr_categoria
+HAVING SUM(dv.cantidad) >= 3
+INTO OUTFILE 'C:/xampp/mysql/data/productos_mas_vendidos.csv'
+FIELDS TERMINATED BY ','
+OPTIONALLY ENCLOSED BY '"'
+LINES TERMINATED BY '\n';
+*/

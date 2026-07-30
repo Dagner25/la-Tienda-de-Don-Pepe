@@ -1,60 +1,66 @@
-# La-Tiendita-de-Don-Pepe
+<?php
+require __DIR__ . '/config/conexion.php';
+require __DIR__ . '/includes/funciones.php';
 
-Proyecto final de Base de Datos
---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-En la actualidad, la gestión eficiente de la información es un factor fundamental para el éxito de cualquier negocio comercial. Los minimarkets, al manejar diariamente grandes cantidades de datos relacionados con productos, ventas, clientes e inventario, requieren herramientas que permitan organizar y controlar esta información de manera rápida y confiable.
+requerir_login();
 
-El presente proyecto tiene como finalidad desarrollar una base de datos para el minimarket “La Tiendita de Don Pepe”, con el objetivo de optimizar la administración de sus operaciones diarias. Actualmente, gran parte de la información se registra de forma manual, lo que puede ocasionar errores, pérdida de datos y dificultades en el control del inventario y las ventas.
+if ($_SERVER['REQUEST_METHOD'] !== 'POST' || !csrf_valido($_POST['csrf'] ?? null)) {
+    header('Location: checkout.php');
+    exit;
+}
 
-La implementación de un sistema gestor de base de datos permitirá almacenar, procesar y consultar información de manera eficiente, facilitando el registro de productos, clientes, proveedores y ventas en tiempo real. Asimismo, contribuirá al control automático del stock, la generación de reportes y la toma de decisiones basadas en información actualizada y confiable. 
+$carrito = carrito_detalle($pdo);
+if (empty($carrito['lineas'])) {
+    flash('error', 'Tu carrito esta vacio.');
+    header('Location: carrito.php');
+    exit;
+}
 
-De esta manera, el proyecto busca ofrecer una solución práctica que mejore la organización y productividad del negocio, demostrando la importancia de las bases de datos en la gestión moderna de establecimientos comerciales.
+$usuario = usuario_actual();
+$idMetodo = (int) ($_POST['id_metodo'] ?? 0);
+$direccion = trim($_POST['direccion'] ?? '');
+$provincia = trim($_POST['provincia'] ?? '');
+$distrito = trim($_POST['distrito'] ?? '');
 
--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+if ($idMetodo <= 0 || $direccion === '' || $provincia === '' || $distrito === '') {
+    flash('error', 'Completa la direccion y el metodo de pago.');
+    header('Location: checkout.php');
+    exit;
+}
 
-## Motor
+$detalles = array_map(function ($linea) {
+    return ['id_producto' => $linea['id_producto'], 'cantidad' => $linea['cantidad']];
+}, $carrito['lineas']);
 
-Motor recomendado: XAMPP con tablas InnoDB
+$json = json_encode($detalles, JSON_UNESCAPED_UNICODE);
 
-Los scripts evitan funciones exclusivas para XAMPP Para JSON se usan `JSON_OBJECT`, `JSON_ARRAY`, `JSON_VALID`, `JSON_LENGTH`, `JSON_EXTRACT`, `JSON_UNQUOTE`, `JSON_SET` y `JSON_REMOVE`
+try {
+    $stmt = $pdo->prepare('CALL sp_registrar_venta(?, ?, ?, ?)');
+    $stmt->execute([$usuario['id_dni'], null, $idMetodo, $json]);
+    $resultado = $stmt->fetch();
+    $stmt->closeCursor();
 
-## Orden de ejecucion
+    $idVenta = (int) $resultado['id_venta_registrada'];
 
-1. `01_creacion_base_datos.sql`
-2. `02_insercion_datos.sql`
-3. `03_crud_complejo.sql`
-4. `04_reportes.sql`
-5. `05_indices_explain.sql`
-6. `06_transacciones.sql`
-7. `07_json_hibrido.sql`
-8. `08_pruebas.sql`
+    $insEnvio = $pdo->prepare(
+        'INSERT INTO envio (direcc_entrega, estado, id_venta) VALUES (?, "Pendiente", ?)'
+    );
+    $insEnvio->execute([trim("$direccion, $distrito, $provincia"), $idVenta]);
 
-## Se realizo la peticion de la rubrica
+    carrito_vaciar();
+    flash('exito', '¡Pedido registrado con exito! Tu numero de pedido es #' . $idVenta . '.');
+    header('Location: pedido_confirmado.php?id=' . $idVenta);
+    exit;
 
-- Integridad: claves primarias, foraneas, `NOT NULL`, `UNIQUE`, `CHECK`, `DEFAULT`, `ON DELETE CASCADE`, `ON DELETE SET NULL` y `ON UPDATE CASCADE`.
-- CRUD complejo: procedimientos `sp_registrar_venta`, `sp_actualizar_detalle_venta` y `sp_anular_venta`.
-- Reportes: procedimientos con `JOIN`, `GROUP BY`, `HAVING`, `SUM`, `COUNT`, `AVG`, `MIN` y `MAX`.
-- Exportacion: consulta `INTO OUTFILE` documentada en `04_reportes.sql`.
-- Optimizacion: indices y planes `EXPLAIN` en `05_indices_explain.sql`.
-- Transacciones: venta con `START TRANSACTION`, `COMMIT`, `ROLLBACK` y `SELECT ... FOR UPDATE`.
-- JSON hibrido: columna `producto.atributos` para datos semiestructurados
-
-## Modelo hibrido
-
-Los datos principales permanecen en tablas relacionales: clientes, empleados, productos, ventas, detalles, categorias y proveedores. La columna `producto.atributos` guarda caracteristicas variables como presentacion, peso, etiquetas, origen o conservacion.
-
-JSON complementa el modelo relacional porque se evita crear columnas vacias para atributos que no aplican a todos los productos, No reemplaza las relaciones, tan solo agrega flexibilidad para informacion semiestructurada
-
-## Exportacion CSV
-
-Antes de ejecutar la exportacion:
-
-```sql
-SHOW VARIABLES LIKE 'secure_file_priv';
-```
-
-Si MariaDB devuelve una ruta, usar esa carpeta en el `INTO OUTFILE` de `04_reportes.sql`. Si no tiene  lospermisos, se debe de ejecutar el reporte normal con:
-
-```sql
-CALL sp_reporte_productos_mas_vendidos('2026-06-01', '2026-07-31', 3);
-```
+} catch (PDOException $e) {
+    // Mensajes controlados desde el SIGNAL SQLSTATE '45000' del procedimiento.
+    $mensaje = $e->getMessage();
+    if (strpos($mensaje, '45000') !== false && preg_match('/45000\s+(.*?)(?:\'|$)/', $mensaje, $m)) {
+        $mensajeLimpio = $m[1];
+    } else {
+        $mensajeLimpio = 'No se pudo registrar tu pedido. Verifica el stock disponible e intenta nuevamente.';
+    }
+    flash('error', $mensajeLimpio);
+    header('Location: checkout.php');
+    exit;
+}
